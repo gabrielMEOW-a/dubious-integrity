@@ -11,7 +11,7 @@ ez::Drive chassis(
     {-20, -19},     // Left Chassis Ports (negative port will reverse it!)
     {13, 12},  // Right Chassis Ports (negative port will reverse it!)
 
-    14,      // IMU Port
+    {14, 15},      // IMU Port
     2.75,  // Wheel Diameter (Remember, 4" wheels without screw holes are actually 4.125!)
     480);   // Wheel RPM = cartridge * (motor gear / wheel gear)
 
@@ -21,10 +21,49 @@ ez::Drive chassis(
 // - `2.75` is the wheel diameter
 // - `4.0` is the distance from the center of the wheel to the center of the robot
 ez::tracking_wheel horiz_tracker(18, 2.0, 4.0);  // This tracking wheel is perpendicular to the drive wheels
-ez::tracking_wheel vert_tracker(17, 2.0, 4.0);   // This tracking wheel is parallel to the drive wheels
+ez::tracking_wheel vert_tracker(17, 2.0, 0.41);   // This tracking wheel is parallel to the drive wheels
 
 // ez::tracking_wheel left_tracker({'A', 'B'}, 2.75, 4.0);
 // ez::tracking_wheel right_tracker({'C', 'D'}, 2.75, 4.0);
+
+double hTarget = 0;
+double rTarget = -90.0;
+double height = 0;
+double angle = 0;
+double kG_lift = 0.0;
+double kG_arm = 0.0;
+double uLift;
+double uRotate;
+double uFront;
+double uBack;
+double uScale;
+double H_MAX = 2400.0;
+double R_MIN = -90.0;
+double R_MAX = 60.0;
+void liftMove(double lift=0, double turn=0) {
+  hTarget = std::clamp(hTarget + lift, 0.0, H_MAX);
+  rTarget = std::clamp(rTarget + turn, R_MIN, R_MAX);
+  cascadeLift.target_set(hTarget);
+  armSpin.target_set(rTarget);
+}
+
+void liftTask(void* param) {
+  while (true) {    
+    height = std::max({-liftf.get_position(), liftb.get_position()});
+    angle = arm.get_angle() / 100.0;
+    angle = (angle > 180.0) ? angle - 360.0 : angle;
+    uLift = cascadeLift.compute(height) + kG_lift;
+    uRotate = armSpin.compute(angle) + kG_arm * cos(angle * M_PI / 180.0);
+    uFront = - uLift + uRotate;
+    uBack = uLift + uRotate;
+
+    uScale = std::max({std::abs(uFront), std::abs(uBack), 127.0}) / 127.0;
+    liftf.move(uFront / uScale);
+    liftb.move(uBack / uScale);
+
+    pros::delay(ez::util::DELAY_TIME);
+  }
+}
 
 /**
  * Runs initialization code. This occurs as soon as the program is started.
@@ -83,6 +122,12 @@ void initialize() {
   // Initialize chassis and auton selector
   chassis.initialize();
   ez::as::initialize();
+  cascadeLift.exit_condition_set(100, 20, 300, 60, 200, 200);
+  armSpin.exit_condition_set(100, 2, 300, 8, 200, 200);
+  liftf.tare_position();
+  liftb.tare_position();
+  arm.reset();
+  pros::Task lift(liftTask, (void*)"parameter(s) here", "i like lifting");
   master.rumble(chassis.drive_imu_calibrated() ? "." : "---");
 }
 
@@ -197,8 +242,15 @@ void ez_screen_task() {
           screen_print_tracker(chassis.odom_tracker_right, "r", 5);
           screen_print_tracker(chassis.odom_tracker_back, "b", 6);
           screen_print_tracker(chassis.odom_tracker_front, "f", 7);
-        } else if (ez::as::page_blank_is_on(1))
-          ez_motor_temperatures();
+        } else if (true) // ez::as::page_blank_is_on(1)
+          // ez_motor_temperatures();
+          ez::screen_print("Lift height target: " + ez::util::to_string_with_precision(hTarget) 
+                            + "\nArm angle target: " + ez::util::to_string_with_precision(rTarget)
+                            + "\nLift height: " + ez::util::to_string_with_precision(height) 
+                            + "\nArm angle: " + ez::util::to_string_with_precision(angle)
+                            + "\nLift height command: " + ez::util::to_string_with_precision(uLift)
+                            + "\nLift turn command: " + ez::util::to_string_with_precision(uRotate),1);
+          
 
         // . . .
         // Add your own blank pages here!
@@ -265,13 +317,14 @@ void ez_template_extras() {
  * operator control task will be stopped. Re-enabling the robot will restart the
  * task, not resume it from where it left off.
  */
+int timer = 0;
 void opcontrol() {
   // This is preference to what you like to drive on
   chassis.drive_brake_set(MOTOR_BRAKE_COAST);
 
   while (true) {
     // Gives you some extras to make EZ-Template ezier
-    ez_template_extras();
+    // ez_template_extras();
 
     // chassis.opcontrol_tank();  // Tank control
     chassis.opcontrol_arcade_standard(ez::SPLIT);   // Standard split arcade
@@ -282,23 +335,30 @@ void opcontrol() {
     // . . .
     // Put more user control code here!
     // . . .
-
-    if (master.get_digital(DIGITAL_L1)) {
-      liftf.move(64);
-      liftb.move(-64);
-    } else if (master.get_digital(DIGITAL_L2)) {
-      liftf.move(-64);
-      liftb.move(64);
-    } else if (master.get_digital(DIGITAL_LEFT)) {
-      liftf.move(64);
-      liftb.move(64);
-    } else if (master.get_digital(DIGITAL_RIGHT)) {
-      liftf.move(-64);
-      liftb.move(-64);
-    } else {
-      liftf.move(0);
-      liftb.move(0);
+    if (master.get_digital_new_press(DIGITAL_X)) {
+      claw.set(!claw.get());
     }
+    if (timer % 2) {
+      if (master.get_digital_new_press(DIGITAL_L1)) {
+        liftMove(250.0);
+      } else if (master.get_digital_new_press(DIGITAL_L2)) {
+        liftMove(-250.0);
+      } else if (master.get_digital_new_press(DIGITAL_LEFT)) {
+        liftMove(0,5.0);
+      } else if (master.get_digital_new_press(DIGITAL_RIGHT)) {
+        liftMove(0,-5.0);
+      }
+    }
+    // if (master.get_digital(DIGITAL_L1)) {
+    //   liftf.move(-127);
+    //   liftb.move(127);
+    // } else if (master.get_digital(DIGITAL_L2)) {
+    //   liftf.move(127);
+    //   liftb.move(-127);
+    // } else {
+    //   liftf.move(0);
+    //   liftb.move(0);
+    // }
 
     if (master.get_digital(DIGITAL_R1)) {
       intake.move(127);
@@ -308,6 +368,7 @@ void opcontrol() {
       intake.move(0);
     }
 
+    timer++;
     pros::delay(ez::util::DELAY_TIME);  // This is used for timer calculations!  Keep this ez::util::DELAY_TIME
   }
 }
