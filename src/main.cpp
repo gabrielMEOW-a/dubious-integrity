@@ -26,6 +26,10 @@ ez::tracking_wheel vert_tracker(17, 2.0, 0.41);   // This tracking wheel is para
 // ez::tracking_wheel left_tracker({'A', 'B'}, 2.75, 4.0);
 // ez::tracking_wheel right_tracker({'C', 'D'}, 2.75, 4.0);
 
+
+//h refers to height target
+//r refers to rotation target
+
 double hTarget = 0;
 double rTarget = 0.0;
 double height = 0;
@@ -36,7 +40,6 @@ double uLift;
 double uRotate;
 double uFront;
 double uBack;
-double uScale;
 double H_MAX = 2400.0;
 double R_MIN = -90.0;
 double R_MAX = 60.0;
@@ -49,17 +52,25 @@ void liftMove(double lift=0, double turn=0) {
 
 void liftTask(void* param) {
   while (true) {    
-    height = std::max({-liftf.get_position(), liftb.get_position()});
+    // Lift / rope-loop coordinate = average of the two motors in the lift direction.
+    // (The old max(-pf, pb) equals lift + |rotation|, so rotating looked like lifting to the PID,
+    //  and a motor running ahead in one direction was invisible to it.)
+    height = (-liftf.get_position() + liftb.get_position()) / 2.0;
     angle = arm.get_angle() / 100.0;
     angle = (angle > 180.0) ? angle - 360.0 : angle;
-    uLift = cascadeLift.compute(height) + kG_lift;
+    uLift = std::clamp(cascadeLift.compute(height) + kG_lift, -127.0, 127.0);
     uRotate = armSpin.compute(angle) + kG_arm * cos(angle * M_PI / 180.0);
+
+    // The lift channel holds the rope tension, so it gets priority: rotation only gets the power
+    // headroom left on each motor. If one motor lags, the lift PID pushes it harder and eases the
+    // free motor off, instead of both being scaled down together.
+    double headroom = 127.0 - std::abs(uLift);
+    uRotate = std::clamp(uRotate, -headroom, headroom);
     uFront = - uLift + uRotate;
     uBack = uLift + uRotate;
 
-    uScale = std::max({std::abs(uFront), std::abs(uBack), 127.0}) / 127.0;
-    liftf.move(uFront / uScale);
-    liftb.move(uBack / uScale);
+    liftf.move(uFront);
+    liftb.move(uBack);
 
     pros::delay(ez::util::DELAY_TIME);
   }
@@ -127,6 +138,9 @@ void initialize() {
   liftf.tare_position();
   liftb.tare_position();
   arm.reset();
+  // PID targets default to 0, so without this the arm drives toward 0 deg on boot until the first button press.
+  cascadeLift.target_set(hTarget);
+  armSpin.target_set(rTarget);
   pros::Task lift(liftTask, (void*)"parameter(s) here", "i like lifting");
   master.rumble(chassis.drive_imu_calibrated() ? "." : "---");
 }
