@@ -8,8 +8,8 @@
 // Chassis constructor
 ez::Drive chassis(
     // These are your drive motors, the first motor is used for sensing!
-    {-20, -19},     // Left Chassis Ports (negative port will reverse it!)
-    {13, 12},  // Right Chassis Ports (negative port will reverse it!)
+    {20, 19},     // Left Chassis Ports (negative port will reverse it!)
+    {-13, -12},  // Right Chassis Ports (negative port will reverse it!)
 
     {14, 15},      // IMU Port
     2.75,  // Wheel Diameter (Remember, 4" wheels without screw holes are actually 4.125!)
@@ -27,7 +27,7 @@ ez::tracking_wheel vert_tracker(17, 2.0, 0.41);   // This tracking wheel is para
 // ez::tracking_wheel right_tracker({'C', 'D'}, 2.75, 4.0);
 
 double hTarget = 0;
-double rTarget = -90.0;
+double rTarget = 0.0;
 double height = 0;
 double angle = 0;
 double kG_lift = 0.0;
